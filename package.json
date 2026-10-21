@@ -1,0 +1,36 @@
+{
+  "name": "mailbazooka",
+  "version": "0.1.0",
+  "description": "Mailbazooka autonomous email lifecycle dispatch CLI & MCP agent gateway",
+  "type": "module",
+  "bin": {
+    "mailbazooka": "bin/mailbazooka.js",
+    "recurring": "bin/mailbazooka.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "bin",
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node18 --outfile=dist/index.js",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "prepublishOnly": "npm run build && npm test",
+    "prepare": "npm run build"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.12"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/0xm0w/mailbazooka-cli.git"
+  }
+}
