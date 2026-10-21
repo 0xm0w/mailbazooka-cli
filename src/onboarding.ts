@@ -45,10 +45,10 @@ This workspace connects to Mailbazooka for lifecycle dispatch.
 - \`pause_schedule\`: Pauses an active sequence or broadcast.
 - \`list_schedules\`: Checks live and draft schedules.
 - \`list_sends\`: Inspects dispatch logs and provider message IDs.
-- \`connect_sender\`: Connects the customer's own SES, Brevo, or Resend account. Mailbazooka does not host sending.
+- \`connect_sender\`: Connects the customer's own SES, Brevo, Resend, or SMTP sender (one per account). Mailbazooka does not host sending.
 
 ## Bring your own sender
-The customer sends from their own provider account, key, and domain. Call \`connect_sender\` with \`provider\` (\`ses\`, \`brevo\`, or \`resend\`), \`from_address\`, and either \`api_key\` or \`region\` plus \`access_key_id\` and \`secret_access_key\`. Pass \`verify_only: true\` to check the key without storing it. The stored credential is encrypted. Responses show the last four characters of the key.
+The customer sends from their own provider account, key, and domain. Call \`connect_sender\` with \`provider\` (\`ses\`, \`brevo\`, or \`resend\`), \`from_address\`, and either \`api_key\` or \`region\` plus \`access_key_id\` and \`secret_access_key\`. For SMTP pass \`provider: "smtp"\`, \`host\`, \`port\`, \`username\`, \`password\`, \`from_address\` and optional \`tls\`; the login is verified before anything is saved. Pass \`verify_only: true\` to check an SES/Brevo/Resend key without storing it. The stored credential is encrypted. Responses show the last four characters of the key.
 
 ## Inbound Webhook Gateways
 - Clerk: \`/api/webhooks/clerk/<slug>\` (Event: \`user.created\`)

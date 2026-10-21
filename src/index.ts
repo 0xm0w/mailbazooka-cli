@@ -428,7 +428,9 @@ sender (this account's own sender; never the global killswitch)
                                       ses: --region (or MAILBAZOOKA_SES_REGION), --access-key-id /
                                       --secret-access-key or MAILBAZOOKA_SES_ACCESS_KEY_ID /
                                       MAILBAZOOKA_SES_SECRET_ACCESS_KEY
-  sender connect --provider gmail|smtp   prints the dashboard link (Google OAuth / SMTP form)
+  sender connect --provider smtp --host <h> --port <n> --user <u> --from you@domain [--from-name "..."] [--tls]
+                                      password: --password or MAILBAZOOKA_SMTP_PASSWORD (verified, then encrypted)
+  sender connect --provider gmail     prints the dashboard link (Google sign-in)
   sender daily-stop <n>               your sender's daily stop, 1-1800 (only lowers; prints the enforced limit)
 schedules and broadcasts
   list [drafts|active]                list schedules
@@ -456,14 +458,12 @@ help
 async function senderConnect(args: string[], env: NodeJS.ProcessEnv, io: Io, base: string): Promise<number> {
   const provider = (flagValue(args, "--provider") ?? "").toLowerCase();
   const settings = `${base.replace(/\/$/, "")}/dashboard?tab=settings`;
-  if (provider === "gmail" || provider === "smtp") {
-    io.log(provider === "gmail"
-      ? "Gmail needs Google sign-in (OAuth), which the CLI can't do."
-      : "SMTP is connected from the dashboard form; the key API has no SMTP connect.");
+  if (provider === "gmail") {
+    io.log("Gmail needs Google sign-in (OAuth), which the CLI can't do.");
     io.log(`Open: ${settings}`);
     return 0;
   }
-  if (provider !== "ses" && provider !== "brevo" && provider !== "resend") {
+  if (provider !== "ses" && provider !== "brevo" && provider !== "resend" && provider !== "smtp") {
     io.err("usage: mailbazooka sender connect --provider ses|brevo|resend|gmail|smtp --from you@domain ... (see --help)");
     return 2;
   }
@@ -476,7 +476,19 @@ async function senderConnect(args: string[], env: NodeJS.ProcessEnv, io: Io, bas
   const fromName = flagValue(args, "--from-name");
   if (fromName) payload.from_name = fromName;
   if (args.includes("--verify-only")) payload.verify_only = true;
-  if (provider === "ses") {
+  if (provider === "smtp") {
+    const host = flagValue(args, "--host");
+    const portRaw = flagValue(args, "--port");
+    const user = flagValue(args, "--user");
+    const password = flagValue(args, "--password") ?? env.MAILBAZOOKA_SMTP_PASSWORD;
+    const port = portRaw ? Number(portRaw) : undefined;
+    if (!host || !port || !Number.isInteger(port) || port < 1 || port > 65535 || !user || !password) {
+      io.err("smtp needs --host, --port, --user, --from and --password (or MAILBAZOOKA_SMTP_PASSWORD); add --tls for implicit TLS (465)");
+      return 2;
+    }
+    Object.assign(payload, { host, port, username: user, password, tls: args.includes("--tls") });
+    delete payload.verify_only;
+  } else if (provider === "ses") {
     const region = flagValue(args, "--region") ?? env.MAILBAZOOKA_SES_REGION;
     const id = flagValue(args, "--access-key-id") ?? env.MAILBAZOOKA_SES_ACCESS_KEY_ID;
     const secret = flagValue(args, "--secret-access-key") ?? env.MAILBAZOOKA_SES_SECRET_ACCESS_KEY;
@@ -501,7 +513,7 @@ async function senderConnect(args: string[], env: NodeJS.ProcessEnv, io: Io, bas
     sender?: { provider?: string; fromAddress?: string; keyHint?: string };
   };
   if (r.ok === false) {
-    io.err(`sender connect failed: ${r.error ?? "unknown error"}`);
+    io.err(`sender connect failed: ${redact(String(r.error ?? "unknown error"), payload)}`);
     return 1;
   }
   if (r.verified && !r.sender) {
@@ -511,6 +523,16 @@ async function senderConnect(args: string[], env: NodeJS.ProcessEnv, io: Io, bas
   const s = r.sender ?? {};
   io.log(`[OK] connected ${s.provider ?? provider} sender ${s.fromAddress ?? from}${s.keyHint ? ` (key ${s.keyHint})` : ""}`);
   return 0;
+}
+
+/** Belt and braces: strip any secret we sent from a server message before printing it. */
+function redact(text: string, payload: Record<string, unknown>): string {
+  let out = text;
+  for (const k of ["password", "api_key", "secret_access_key", "access_key_id"]) {
+    const v = payload[k];
+    if (typeof v === "string" && v.length > 0) out = out.split(v).join("••••");
+  }
+  return out;
 }
 
 function flagValue(args: string[], name: string): string | undefined {

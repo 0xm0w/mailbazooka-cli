@@ -25,6 +25,9 @@ export async function call(
     if (failure.error === "refusal") {
       throw new CliError(`refused: ${failure.reason}`);
     }
+    if (failure.error === "sender_exists") {
+      throw new CliError("this account already has a sender (1 per account). Remove it in the dashboard before connecting another.");
+    }
     if (failure.error === "revoked") {
       throw new CliError("this key is revoked; run npx github:0xm0w/mailbazooka-cli connect <key> with a fresh one");
     }

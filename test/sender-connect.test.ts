@@ -50,16 +50,16 @@ test("sender connect: secrets from env (brevo, ses), never echoed; errors don't 
   } finally { h.restore(); }
 });
 
-test("sender connect: missing secret refuses without a call; gmail/smtp print the dashboard URL", async () => {
+test("sender connect: missing secret refuses without a call; gmail prints the dashboard URL", async () => {
   const h = harness();
   try {
     assert.equal(await h.go({}, "sender", "connect", "--provider", "resend", "--from", "a@b.test"), 2);
     assert.equal(await h.go({}, "sender", "connect", "--provider", "ses", "--from", "a@b.test"), 2);
     assert.equal(await h.go({}, "sender", "connect", "--provider", "mailgun", "--from", "a@b.test"), 2);
     assert.equal(await h.go({}, "sender", "connect", "--provider", "gmail"), 0);
-    assert.equal(await h.go({}, "sender", "connect", "--provider", "smtp"), 0);
+    assert.equal(await h.go({}, "sender", "connect", "--provider", "smtp", "--host", "h", "--port", "587", "--user", "u", "--from", "a@b.test"), 2);
     assert.equal(h.calls.length, 0);
-    assert.equal(h.out.filter((l) => l === "Open: https://app.example.test/dashboard?tab=settings").length, 2);
+    assert.equal(h.out.filter((l) => l === "Open: https://app.example.test/dashboard?tab=settings").length, 1);
   } finally { h.restore(); }
 });
 
@@ -78,5 +78,35 @@ test("sender daily-stop: validates 1-1800 and prints the enforced limit", async 
 test("--help lists sender connect and daily-stop", () => {
   assert.match(HELP, /sender connect --provider ses\|brevo\|resend/);
   assert.match(HELP, /sender daily-stop <n>/);
-  assert.match(HELP, /gmail\|smtp/);
+  assert.match(HELP, /--provider smtp --host <h> --port <n> --user <u>/);
+  assert.match(HELP, /MAILBAZOOKA_SMTP_PASSWORD/);
+});
+
+const SMTP_PW = "smtp-Pass-0nly-Mine!";
+
+test("sender connect smtp: flags/env password sent once, never printed (success, failure, 409)", async () => {
+  const h = harness((_n, args) =>
+    args.from_address === "fail@b.test"
+      ? { ok: false, error: `535 auth failed for ${SMTP_PW}` }
+      : { ok: true, sender: { provider: "smtp", fromAddress: args.from_address, keyHint: "••••ine!" } });
+  try {
+    assert.equal(await h.go({}, "sender", "connect", "--provider", "smtp", "--host", "smtp.b.test", "--port", "465", "--user", "me", "--from", "me@b.test", "--from-name", "Me", "--tls", "--password", SMTP_PW), 0);
+    assert.deepEqual(h.calls[0], { name: "connect_sender", args: { provider: "smtp", from_address: "me@b.test", from_name: "Me", host: "smtp.b.test", port: 465, username: "me", password: SMTP_PW, tls: true } });
+    assert.equal(await h.go({ MAILBAZOOKA_SMTP_PASSWORD: SMTP_PW }, "sender", "connect", "--provider", "smtp", "--host", "smtp.b.test", "--port", "587", "--user", "me", "--from", "fail@b.test"), 1);
+    assert.equal(h.calls[1].args.password, SMTP_PW);
+    assert.equal(h.calls[1].args.tls, false);
+    const text = h.out.join("\n");
+    assert.ok(!text.includes(SMTP_PW), text);
+    assert.match(text, /connected smtp sender me@b.test \(key ••••ine!\)/);
+    assert.match(text, /535 auth failed for ••••/);
+  } finally { h.restore(); }
+  // 409 from the API becomes a plain message.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({ error: "sender_exists", message: "x" }), { status: 409 })) as typeof fetch;
+  try {
+    await assert.rejects(
+      run(["node", "mailbazooka", "sender", "connect", "--provider", "smtp", "--host", "h", "--port", "587", "--user", "u", "--from", "a@b.test", "--password", SMTP_PW],
+        { MAILBAZOOKA_API_KEY: "mb_t" }, { log() {}, err() {}, render() {}, readLine: async () => "" }),
+      (e: Error) => /already has a sender/.test(e.message) && !e.message.includes(SMTP_PW));
+  } finally { globalThis.fetch = realFetch; }
 });
