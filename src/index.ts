@@ -271,9 +271,24 @@ async function dispatch(argv: string[], env: NodeJS.ProcessEnv, io: Io): Promise
     case "sender": {
       // Pauses or resumes only this account's own sender. Never a global killswitch.
       const sub = rest[0] ?? "status";
+      if (sub === "connect") return senderConnect(rest.slice(1), env, io, base);
+      if (sub === "daily-stop") {
+        const raw = rest[1];
+        const n = Number(raw);
+        if (!raw || !Number.isInteger(n) || n < 1 || n > 1800) {
+          io.err("usage: mailbazooka sender daily-stop <n>   (whole number 1-1800; it can only lower your limit)");
+          return 2;
+        }
+        const r = (await withKey(env, io, (key) => call(base, key, "set_sender_daily_stop", { daily_stop: n }))) as {
+          dailyStop: number | null;
+          enforcedToday: number;
+        };
+        io.log(`[OK] daily stop set to ${r.dailyStop}. Enforced today: ${r.enforcedToday} (the lowest of your stop, plan, warm-up and shared-domain caps).`);
+        return 0;
+      }
       const tool = sub === "pause" ? "pause_sender" : sub === "resume" ? "resume_sender" : sub === "status" ? "get_sender" : null;
       if (!tool) {
-        io.err("usage: mailbazooka sender [status|pause|resume]");
+        io.err("usage: mailbazooka sender [status|pause|resume|connect|daily-stop <n>]");
         return 2;
       }
       const result = await withKey(env, io, (key) => call(base, key, tool, {}));
@@ -408,6 +423,13 @@ account
 sender (this account's own sender; never the global killswitch)
   sender [status]                     show the connected sender
   sender pause | sender resume        pause or resume your sender
+  sender connect --provider ses|brevo|resend --from you@domain [--from-name "..."] [--verify-only]
+                                      resend/brevo: --api-key or MAILBAZOOKA_SENDER_API_KEY
+                                      ses: --region (or MAILBAZOOKA_SES_REGION), --access-key-id /
+                                      --secret-access-key or MAILBAZOOKA_SES_ACCESS_KEY_ID /
+                                      MAILBAZOOKA_SES_SECRET_ACCESS_KEY
+  sender connect --provider gmail|smtp   prints the dashboard link (Google OAuth / SMTP form)
+  sender daily-stop <n>               your sender's daily stop, 1-1800 (only lowers; prints the enforced limit)
 schedules and broadcasts
   list [drafts|active]                list schedules
   broadcast create --to a,b --subject "..." --body "..." [--name "..."] [--at ISO] [--tz Area/City]
@@ -431,6 +453,66 @@ keys
 help
   help | --help | -h`;
 
+async function senderConnect(args: string[], env: NodeJS.ProcessEnv, io: Io, base: string): Promise<number> {
+  const provider = (flagValue(args, "--provider") ?? "").toLowerCase();
+  const settings = `${base.replace(/\/$/, "")}/dashboard?tab=settings`;
+  if (provider === "gmail" || provider === "smtp") {
+    io.log(provider === "gmail"
+      ? "Gmail needs Google sign-in (OAuth), which the CLI can't do."
+      : "SMTP is connected from the dashboard form; the key API has no SMTP connect.");
+    io.log(`Open: ${settings}`);
+    return 0;
+  }
+  if (provider !== "ses" && provider !== "brevo" && provider !== "resend") {
+    io.err("usage: mailbazooka sender connect --provider ses|brevo|resend|gmail|smtp --from you@domain ... (see --help)");
+    return 2;
+  }
+  const from = flagValue(args, "--from");
+  if (!from) {
+    io.err("--from <address> is required");
+    return 2;
+  }
+  const payload: Record<string, unknown> = { provider, from_address: from };
+  const fromName = flagValue(args, "--from-name");
+  if (fromName) payload.from_name = fromName;
+  if (args.includes("--verify-only")) payload.verify_only = true;
+  if (provider === "ses") {
+    const region = flagValue(args, "--region") ?? env.MAILBAZOOKA_SES_REGION;
+    const id = flagValue(args, "--access-key-id") ?? env.MAILBAZOOKA_SES_ACCESS_KEY_ID;
+    const secret = flagValue(args, "--secret-access-key") ?? env.MAILBAZOOKA_SES_SECRET_ACCESS_KEY;
+    if (!region || !id || !secret) {
+      io.err("ses needs --region plus --access-key-id/--secret-access-key (or MAILBAZOOKA_SES_ACCESS_KEY_ID / MAILBAZOOKA_SES_SECRET_ACCESS_KEY)");
+      return 2;
+    }
+    Object.assign(payload, { region, access_key_id: id, secret_access_key: secret });
+  } else {
+    const apiKey = flagValue(args, "--api-key") ?? env.MAILBAZOOKA_SENDER_API_KEY;
+    if (!apiKey) {
+      io.err(`${provider} needs --api-key or MAILBAZOOKA_SENDER_API_KEY`);
+      return 2;
+    }
+    payload.api_key = apiKey;
+  }
+  // Secrets go only in the request body (same connect_sender tool the MCP uses). Nothing prints them.
+  const r = (await withKey(env, io, (key) => call(base, key, "connect_sender", payload))) as {
+    ok?: boolean;
+    error?: string;
+    verified?: boolean;
+    sender?: { provider?: string; fromAddress?: string; keyHint?: string };
+  };
+  if (r.ok === false) {
+    io.err(`sender connect failed: ${r.error ?? "unknown error"}`);
+    return 1;
+  }
+  if (r.verified && !r.sender) {
+    io.log(`[OK] ${provider} credentials verified (not stored)`);
+    return 0;
+  }
+  const s = r.sender ?? {};
+  io.log(`[OK] connected ${s.provider ?? provider} sender ${s.fromAddress ?? from}${s.keyHint ? ` (key ${s.keyHint})` : ""}`);
+  return 0;
+}
+
 function flagValue(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
   if (i >= 0) return args[i + 1];
@@ -445,7 +527,7 @@ async function withKey(
 ): Promise<unknown> {
   const key = apiKeyFromEnvOrFile(env);
   if (!key) {
-    io.err("no api key; run mailbazooka connect <key> or set MAILBAZOOKA_API_KEY");
+    io.err("no api key; run npx github:0xm0w/mailbazooka-cli connect <key> or set MAILBAZOOKA_API_KEY");
     throw new Error("no api key") as CliError;
   }
   return fn(key);

@@ -26,13 +26,13 @@ export async function call(
       throw new CliError(`refused: ${failure.reason}`);
     }
     if (failure.error === "revoked") {
-      throw new CliError("this key is revoked; run mailbazooka connect <key> with a fresh one");
+      throw new CliError("this key is revoked; run npx github:0xm0w/mailbazooka-cli connect <key> with a fresh one");
     }
     if (failure.error === "invalid_key") {
-      throw new CliError("this key is not valid; run mailbazooka connect <key> with a key from the dashboard");
+      throw new CliError("this key is not valid; run npx github:0xm0w/mailbazooka-cli connect <key> with a key from the dashboard");
     }
     if (failure.error === "no_key") {
-      throw new CliError("no key presented; run mailbazooka connect <key>");
+      throw new CliError("no key presented; run npx github:0xm0w/mailbazooka-cli connect <key>");
     }
     throw new CliError(`the api refused (${res.status}): ${text}`);
   }

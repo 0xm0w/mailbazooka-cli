@@ -13,7 +13,7 @@ mailbazooka --help
 
 `connect` stores your API key and writes MAILBAZOOKA.md (agent instructions) plus an MCP config into your project.
 
-Commands: `status`, `plan`, `metrics`, `sender [status|pause|resume]` (your own sender only), `list`, `broadcast create|edit`, `arm`, `pause`, `sends`, `install`, `enroll`, `subscribers [list|remove <email> --yes]`, `replies`, `reply`, `logs`, `events`, `domains`. API keys are managed in the dashboard. `mailbazooka --help` lists everything.
+Commands: `status`, `plan`, `metrics`, `sender [status|pause|resume]` (your own sender only), `sender connect --provider ses|brevo|resend ...` (secrets from flags or env, never printed; gmail/smtp print the dashboard link), `sender daily-stop <n>`, `list`, `broadcast create|edit`, `arm`, `pause`, `sends`, `install`, `enroll`, `subscribers [list|remove <email> --yes]`, `replies`, `reply`, `logs`, `events`, `domains`. API keys are managed in the dashboard. `mailbazooka --help` lists everything.
 
 Override the API host with `MAILBAZOOKA_BASE_URL`.
 
