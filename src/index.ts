@@ -110,7 +110,7 @@ async function dispatch(argv: string[], env: NodeJS.ProcessEnv, io: Io): Promise
     case "help":
     case "--help":
     case "-h":
-      io.log("mailbazooka connect [key] | status | list [drafts|active] | install | arm <id> | pause <id> | sends <id> | enroll <email> [name] | domains [add|remove|health] | metrics | replies | reply <email> --text \"...\" [--subject \"...\"]");
+      io.log(HELP);
       return 0;
 
     case "whoami":
@@ -268,10 +268,174 @@ async function dispatch(argv: string[], env: NodeJS.ProcessEnv, io: Io): Promise
       return 0;
     }
 
+    case "sender": {
+      // Pauses or resumes only this account's own sender. Never a global killswitch.
+      const sub = rest[0] ?? "status";
+      const tool = sub === "pause" ? "pause_sender" : sub === "resume" ? "resume_sender" : sub === "status" ? "get_sender" : null;
+      if (!tool) {
+        io.err("usage: mailbazooka sender [status|pause|resume]");
+        return 2;
+      }
+      const result = await withKey(env, io, (key) => call(base, key, tool, {}));
+      if (sub !== "status") io.log(`[OK] sender ${sub === "pause" ? "paused" : "resumed"} (this account only)`);
+      io.render(JSON.stringify(result, null, 2));
+      return 0;
+    }
+
+    case "subscribers": {
+      const sub = rest[0] ?? "list";
+      if (sub === "list") {
+        const result = await withKey(env, io, (key) => call(base, key, "list_subscribers", {}));
+        io.render(JSON.stringify(result, null, 2));
+        return 0;
+      }
+      if (sub === "remove") {
+        const email = rest[1];
+        if (!email || email.startsWith("--")) {
+          io.err("usage: mailbazooka subscribers remove <email> --yes");
+          return 2;
+        }
+        if (!rest.includes("--yes")) {
+          io.err(`this removes ${email} from your sequences and drops their unsent steps. Re-run with --yes to confirm.`);
+          return 2;
+        }
+        const result = await withKey(env, io, (key) => call(base, key, "remove_subscriber", { email, confirm: true }));
+        io.log(`[OK] removed ${email}`);
+        io.render(JSON.stringify(result, null, 2));
+        return 0;
+      }
+      io.err("usage: mailbazooka subscribers [list|remove <email> --yes]");
+      return 2;
+    }
+
+    case "broadcast": {
+      const sub = rest[0];
+      if (sub === "create") {
+        const to = (flagValue(rest, "--to") ?? "").split(",").map((e) => e.trim()).filter(Boolean);
+        const subject = flagValue(rest, "--subject");
+        const body = flagValue(rest, "--body");
+        if (to.length === 0 || !subject || !body) {
+          io.err('usage: mailbazooka broadcast create --to a@x.com,b@y.com --subject "..." --body "..." [--name "..."] [--at ISO-time] [--tz Area/City]');
+          return 2;
+        }
+        const args: Record<string, unknown> = {
+          emails: to,
+          subject,
+          body,
+          idempotency_key: `cli:broadcast:${Date.now()}`,
+        };
+        const name = flagValue(rest, "--name");
+        const at = flagValue(rest, "--at");
+        const tz = flagValue(rest, "--tz");
+        if (name) args.name = name;
+        if (at) args.next_send_at = at;
+        if (tz) args.time_zone = tz;
+        const result = await withKey(env, io, (key) => call(base, key, "create_schedule", args));
+        io.log("[OK] saved as a draft. Arm it with: mailbazooka arm <id>");
+        io.render(JSON.stringify(result, null, 2));
+        return 0;
+      }
+      if (sub === "edit") {
+        const id = rest[1];
+        const args: Record<string, unknown> = { id };
+        for (const f of ["subject", "body", "name"]) {
+          const v = flagValue(rest, `--${f}`);
+          if (v !== undefined) args[f] = v;
+        }
+        if (!id || id.startsWith("--") || Object.keys(args).length === 1) {
+          io.err('usage: mailbazooka broadcast edit <id> [--subject "..."] [--body "..."] [--name "..."] (drafts only; pause first)');
+          return 2;
+        }
+        await withKey(env, io, (key) => call(base, key, "update_schedule", args));
+        io.log("[OK] draft updated");
+        return 0;
+      }
+      io.err("usage: mailbazooka broadcast [create|edit] ...");
+      return 2;
+    }
+
+    case "logs":
+    case "events": {
+      const limitRaw = flagValue(rest, "--limit");
+      const limit = limitRaw ? Number(limitRaw) : undefined;
+      const tool = command === "logs" ? "list_dispatches" : "list_events";
+      const result = await withKey(env, io, (key) => call(base, key, tool, limit ? { limit } : {}));
+      io.render(JSON.stringify(result, null, 2));
+      return 0;
+    }
+
+    case "plan": {
+      const p = (await withKey(env, io, (key) => call(base, key, "get_status", {}))) as {
+        tier?: string;
+        armed?: { used: number; cap: number };
+        recipients?: { used: number; cap: number | null };
+        sendsToday?: { used: number; cap: number; label: string };
+        enroll?: boolean;
+        footer?: boolean;
+      };
+      io.log(`plan: ${p.tier ?? "unknown"}`);
+      if (p.armed) io.log(`armed schedules: ${p.armed.used} / ${p.armed.cap}`);
+      if (p.recipients) io.log(`recipients: ${p.recipients.used} / ${p.recipients.cap ?? "no limit"}`);
+      if (p.sendsToday) io.log(`sends today: ${p.sendsToday.used} / ${p.sendsToday.cap} (${p.sendsToday.label})`);
+      if (p.enroll !== undefined) io.log(`enroll: ${p.enroll ? "on" : "off"} · footer: ${p.footer ? "on" : "off"}`);
+      if (p.tier === "free") io.log("upgrade: Premium $5/mo or $48/yr at /premium");
+      return 0;
+    }
+
+    case "keys": {
+      // Keys are created and revoked in the dashboard only (session sign-in). An API key
+      // cannot mint or revoke keys, by design.
+      io.err("API keys are managed in the dashboard (Keys tab): a key cannot list, create or revoke keys.");
+      return 2;
+    }
+
     default:
       io.err(`unknown command: ${command}`);
       return 2;
   }
+}
+
+export const HELP = `usage: mailbazooka <command> [--key <key>]   (start with: mailbazooka connect <key>)
+
+setup
+  connect [key]                       store your key, write .mcp.json and MAILBAZOOKA.md
+  add                                 (re)write .mcp.json and MAILBAZOOKA.md here
+  login                               paste and store a key
+account
+  status | whoami                     account payload (limits, sender, flags)
+  plan                                plan and limits summary
+  metrics                             sending metrics
+sender (this account's own sender; never the global killswitch)
+  sender [status]                     show the connected sender
+  sender pause | sender resume        pause or resume your sender
+schedules and broadcasts
+  list [drafts|active]                list schedules
+  broadcast create --to a,b --subject "..." --body "..." [--name "..."] [--at ISO] [--tz Area/City]
+  broadcast edit <id> [--subject "..."] [--body "..."] [--name "..."]   drafts only
+  arm <id> | pause <id>               arm or pause a schedule
+  sends <id>                          one schedule and its sends
+heartbeat and subscribers
+  install [--product --action --support]   install the heartbeat sequence as a draft
+  enroll <email> [name]               enroll a subscriber
+  subscribers [list]                  list subscribers
+  subscribers remove <email> --yes    remove a subscriber and their unsent steps
+  replies                             inbound replies
+  reply <email> --text "..." [--subject "..."]   record a reply (pauses their follow-ups)
+logs
+  logs [--limit N]                    recent dispatches (sends, bounces, provider events)
+  events [--limit N]                  tracked events
+domains
+  domains [add <d>|remove <d>|health <d>]
+keys
+  keys                                managed in the dashboard only (a key cannot manage keys)
+help
+  help | --help | -h`;
+
+function flagValue(args: string[], name: string): string | undefined {
+  const i = args.indexOf(name);
+  if (i >= 0) return args[i + 1];
+  const eq = args.find((a) => a.startsWith(`${name}=`));
+  return eq ? eq.slice(name.length + 1) : undefined;
 }
 
 async function withKey(
